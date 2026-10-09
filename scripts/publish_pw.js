@@ -15,7 +15,8 @@
  *
  * 前置：
  *   1) 隔离 Chrome 已后台拉起（isolated-browser/scripts/launch.js，端口 9222，profile 已登录公众号）
- *   2) OPENCLAW_NODE_MODULES 指向含 playwright-core 的 node_modules
+ *   2) playwright-core —— 路径由 ../../isolated-browser/scripts/pathkit.js 运行时探测，
+ *      也可设 OPENCLAW_NODE_MODULES 覆盖
  *
  * 关键结论（详见 references/troubleshooting.md）：
  *   - 所有交互必须用受信任输入 page.mouse.click(元素中心)；合成事件在新版编辑器失效
@@ -29,16 +30,24 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const NM = process.env.OPENCLAW_NODE_MODULES
-  || path.join(os.homedir(), '.workbuddy', 'binaries', 'node', 'workspace', 'node_modules');
-const { chromium } = require(path.join(NM, 'playwright-core'));
+function loadPlaywright() {
+  // 首选：公共解析器（不写死用户名 / 盘符 / 版本号）
+  try {
+    return require(path.resolve(__dirname, '..', '..', 'isolated-browser', 'scripts', 'pathkit.js')).resolvePlaywright();
+  } catch (e) { /* 回退本地探测 */ }
+  const NM = process.env.OPENCLAW_NODE_MODULES
+    || path.join(os.homedir(), '.workbuddy', 'binaries', 'node', 'workspace', 'node_modules');
+  return require(path.join(NM, 'playwright-core'));
+}
+
+const { chromium } = loadPlaywright();
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const A = process.argv.slice(2);
 const arg = (k, d) => { const i = A.indexOf(k); return i >= 0 ? A[i + 1] : d; };
 const flag = k => A.includes(k);
 
-const CDP_PORT = arg('--cdp', '9222');
+const CDP_PORT = arg('--cdp', process.env.ISOB_CDP_PORT || '9222');
 const CONTENT_PATH = path.resolve(arg('--content', path.join(process.cwd(), 'content.json')));
 const OUT_DIR = path.resolve(arg('--out', process.cwd()));
 const VERIFY_WAIT_MS = parseInt(arg('--verify-wait', '300'), 10) * 1000;

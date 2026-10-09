@@ -15,7 +15,6 @@ cd ~/.workbuddy/skills/isolated-browser/scripts && node launch.js "https://mp.we
 ## 1. 一键发布
 
 ```bash
-export OPENCLAW_NODE_MODULES="<home>/.workbuddy/binaries/node/workspace/node_modules"
 node scripts/publish_pw.js --content ./content.json --cdp 9222 --out ./out
 ```
 
@@ -47,7 +46,7 @@ node scripts/publish_pw.js --content ./content.json --cdp 9222 --out ./out
 ## 3. 配图选择（可选）
 
 ```bash
-node scripts/pick_image.js --tags "婚庆用车,婚庆婚车车队" --keyword "婚车租车" --dir "D:/skills/car"
+node scripts/pick_image.js --tags "婚庆用车,婚庆婚车车队" --keyword "婚车租车" --dir "<素材目录>"
 node scripts/pick_image.js --tags "..." --pick 11     # 看图复核后强制指定
 ```
 

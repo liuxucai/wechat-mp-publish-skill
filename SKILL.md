@@ -34,10 +34,10 @@ wechat-mp-publish-skill/
 
 | 依赖 | 位置 / 说明 |
 |---|---|
-| Node.js | 本机托管版 `~/.workbuddy/binaries/node/versions/22.22.2-3/node.exe` |
-| playwright-core | `~/.workbuddy/binaries/node/workspace/node_modules`，运行前设 `OPENCLAW_NODE_MODULES` 指向该目录 |
+| Node.js | 本机托管版 `~/.workbuddy/binaries/node/versions/<ver>/node.exe` |
+| playwright-core | 由 `isolated-browser/scripts/pathkit.js` 运行时自动探测，一般无需设置 |
 | 隔离 Chrome | `isolated-browser` skill 的 `scripts/launch.js`，profile `~/.chrome_qclaw_stable`（公众号登录态已持久化） |
-| 素材库 | `D:\skills\car\`（`tag.txt` 文章标签库、`pic-tag.txt` 图片标签库、`*.jpg` 图片） |
+| 素材库 | 含 `tag.txt`（文章标签库）、`pic-tag.txt`（图片标签库）、`*.jpg` 的目录。**路径自动探测**：`--dir` 参数 → `PUBLISH_IMAGE_DIR` 环境变量 → skills 根旁的 `car/` → `~/car` → `./car` |
 
 ## 使用
 
@@ -52,7 +52,7 @@ cd ~/.workbuddy/skills/isolated-browser/scripts && node launch.js "https://mp.we
 ### 2. 一键发布
 
 ```bash
-export OPENCLAW_NODE_MODULES="<home>/.workbuddy/binaries/node/workspace/node_modules"
+# playwright-core 由脚本自动探测，无需设 OPENCLAW_NODE_MODULES
 node scripts/publish_pw.js --content ./content.json --cdp 9222 --out ./out
 ```
 
@@ -67,7 +67,7 @@ node scripts/probe_editor.js --cdp 9222
 ### 3. 配图选择（可选）
 
 ```bash
-node scripts/pick_image.js --tags "婚庆用车,婚庆婚车车队" --keyword "婚车租车" --dir "D:/skills/car"
+node scripts/pick_image.js --tags "婚庆用车,婚庆婚车车队" --keyword "婚车租车" --dir "<素材目录>"
 node scripts/pick_image.js --tags "..." --pick 11        # 复核后强制指定图片编号
 ```
 

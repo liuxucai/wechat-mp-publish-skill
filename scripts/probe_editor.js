@@ -14,13 +14,21 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const NM = process.env.OPENCLAW_NODE_MODULES
-  || path.join(os.homedir(), '.workbuddy', 'binaries', 'node', 'workspace', 'node_modules');
-const { chromium } = require(path.join(NM, 'playwright-core'));
+function loadPlaywright() {
+  // 首选：公共解析器（不写死用户名 / 盘符 / 版本号）
+  try {
+    return require(path.resolve(__dirname, '..', '..', 'isolated-browser', 'scripts', 'pathkit.js')).resolvePlaywright();
+  } catch (e) { /* 回退本地探测 */ }
+  const NM = process.env.OPENCLAW_NODE_MODULES
+    || path.join(os.homedir(), '.workbuddy', 'binaries', 'node', 'workspace', 'node_modules');
+  return require(path.join(NM, 'playwright-core'));
+}
+
+const { chromium } = loadPlaywright();
 
 const A = process.argv.slice(2);
 const arg = (k, d) => { const i = A.indexOf(k); return i >= 0 ? A[i + 1] : d; };
-const CDP_PORT = arg('--cdp', '9222');
+const CDP_PORT = arg('--cdp', process.env.ISOB_CDP_PORT || '9222');
 const OUT_DIR = path.resolve(arg('--out', process.cwd()));
 fs.mkdirSync(OUT_DIR, { recursive: true });
 

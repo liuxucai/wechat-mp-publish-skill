@@ -3,8 +3,11 @@
  * 素材图匹配脚本 —— 按文章标签从素材库 pic-tag.txt 中挑出最匹配的一张配图
  *
  * 用法：
- *   node scripts/pick_image.js --tags "婚庆用车,婚庆婚车车队" --keyword 婚车租车 [--dir D:/skills/car]
+ *   node scripts/pick_image.js --tags "婚庆用车,婚庆婚车车队" --keyword 婚车租车 [--dir <素材目录>]
  *   node scripts/pick_image.js --tags "..." --pick 11          # 复核后强制指定图片编号
+ *
+ * 素材目录解析顺序（不写死路径）：--dir 参数 → PUBLISH_IMAGE_DIR 环境变量
+ *   → skills 根目录旁的 car/ → ~/car → ./car
  *
  * 规则与两个指标：
  *   1) tagScore   —— 标签在 pic-tag.txt 块内的**精确命中数**（字面匹配，最可靠）
@@ -26,14 +29,31 @@ const A = process.argv.slice(2);
 const arg = (k, d) => { const i = A.indexOf(k); return i >= 0 ? A[i + 1] : d; };
 const flag = k => A.includes(k);
 
-const DIR = arg('--dir', 'D:/skills/car');
+// 素材目录：不写死，按 --dir / 环境变量 / 常见位置依次探测
+function resolveImageDir() {
+  const explicit = arg('--dir', '');
+  if (explicit) return explicit;
+  if (process.env.PUBLISH_IMAGE_DIR) return process.env.PUBLISH_IMAGE_DIR;
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  const cands = [
+    path.resolve(__dirname, '..', '..', 'car'),   // skills 根旁的 car（<素材目录>）
+    home && path.join(home, 'car'),
+    path.join(process.cwd(), 'car'),
+  ].filter(Boolean);
+  for (const c of cands) {
+    try { if (fs.statSync(c).isDirectory()) return c; } catch (e) { /* next */ }
+  }
+  return cands[0];
+}
+
+const DIR = resolveImageDir();
 const PIC_TAG = path.join(DIR, arg('--picfile', 'pic-tag.txt'));
 const TAG_FILE = path.join(DIR, arg('--tagfile', 'tag.txt'));
 const KEYWORD = (arg('--keyword', '') || '').trim();
 const PICK = parseInt(arg('--pick', '0'), 10) || 0;
 const TAGS = (arg('--tags', '') || '').split(/[,，、|]/).map(s => s.trim()).filter(Boolean);
 
-if (!TAGS.length) { console.error('用法: node pick_image.js --tags "标签1,标签2" [--keyword 关键词] [--dir D:/skills/car] [--pick N]'); process.exit(1); }
+if (!TAGS.length) { console.error('用法: node pick_image.js --tags "标签1,标签2" [--keyword 关键词] [--dir <素材目录>] [--pick N]'); process.exit(1); }
 if (!fs.existsSync(PIC_TAG)) { console.error('未找到图片标签库:', PIC_TAG); process.exit(1); }
 
 const norm = s => (s || '').replace(/[\s\u3000]/g, '');
