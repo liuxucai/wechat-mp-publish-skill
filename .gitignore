@@ -1,0 +1,10 @@
+# 运行产物（发布截图 / 临时结果）不入库
+/*.png
+publish_result.json
+
+# 工作区
+.workspace/
+**/.workspace/
+node_modules/
+*.log
+*.tmp

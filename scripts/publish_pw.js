@@ -66,6 +66,13 @@ async function shot(page, name) {
 
 /* ------------------------- 受信任点击工具 ------------------------- */
 
+/**
+ * ⚠️ 视口外坐标点击会落空（2026-10-12 实测，与搜狐发布按钮同一个坑）：
+ * page.mouse.click 用的是「视口坐标」，getBoundingClientRect 在元素位于视口外时
+ * 返回的 y 远超视口高度，点击打在视口外 → 无任何反应、无报错。
+ * 所以两个点击工具都必须先 scrollIntoView 把元素滚进视口、等渲染稳定后**重取坐标**再点。
+ */
+
 /** 选择器 + 精确文本，取最后一个可见匹配（最内层元素）后按坐标点击 */
 async function clickExact(page, selector, text, timeout = 5000) {
   const end = Date.now() + timeout;
@@ -75,11 +82,25 @@ async function clickExact(page, selector, text, timeout = 5000) {
       document.querySelectorAll(selector).forEach(el => {
         if ((el.innerText || '').trim() !== text) return;
         const r = el.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) m.push({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        if (r.width > 0 && r.height > 0) m.push({ el, x: r.x + r.width / 2, y: r.y + r.height / 2 });
       });
-      return m.length ? m[m.length - 1] : null;
+      const t = m.length ? m[m.length - 1] : null;
+      if (t && t.el.scrollIntoView) t.el.scrollIntoView({ block: 'center' });
+      return t ? { x: t.x, y: t.y } : null;
     }, { selector, text }).catch(() => null);
-    if (hit) { await page.mouse.click(hit.x, hit.y); return true; }
+    if (hit) {
+      await sleep(350); // 等滚动/重渲染完成
+      const p2 = await page.evaluate(({ selector, text }) => {
+        const m = [];
+        document.querySelectorAll(selector).forEach(el => {
+          if ((el.innerText || '').trim() !== text) return;
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) m.push({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        });
+        return m.length ? m[m.length - 1] : null;
+      }, { selector, text }).catch(() => null);
+      if (p2) { await page.mouse.click(p2.x, p2.y); return true; }
+    }
     await sleep(400);
   }
   return false;
@@ -93,9 +114,20 @@ async function clickSel(page, selector, timeout = 6000) {
       const el = document.querySelector(sel);
       if (!el) return null;
       const r = el.getBoundingClientRect();
-      return (r.width > 0 && r.height > 0) ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null;
+      if (!(r.width > 0 && r.height > 0)) return null;
+      if (el.scrollIntoView) el.scrollIntoView({ block: 'center' });
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
     }, selector).catch(() => null);
-    if (p) { await page.mouse.click(p.x, p.y); return true; }
+    if (p) {
+      await sleep(350); // 等滚动/重渲染完成
+      const p2 = await page.evaluate(sel => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return (r.width > 0 && r.height > 0) ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null;
+      }, selector).catch(() => null);
+      if (p2) { await page.mouse.click(p2.x, p2.y); return true; }
+    }
     await sleep(400);
   }
   return false;
@@ -176,6 +208,19 @@ async function realImgs(page, idx) {
 
 /* ----------------------------- 封面 ----------------------------- */
 
+/**
+ * 封面（从正文选择）——2026-10-13 实测的新版三步流程：
+ *   ① 点封面区 `.select-cover__btn.js_cover_btn_area` → 弹 `pop-opr` 菜单
+ *   ② 菜单「从正文选择」→ 弹 `.weui-desktop-dialog_img-picker`「选择图片」
+ *      —— **单选**（ctrl 多选无效，实测 2026-10-13）：点 `span.appmsg_content_img.cover`
+ *         缩略图选中 → 「下一步」由 disabled 变可用
+ *   ③ 弹 `.weui-desktop-dialog`「编辑封面」：左侧 Jcrop 裁剪区 + 右侧两张预览卡
+ *        「2.35:1 (消息列表)」「1:1 (转发卡片和公众号主页)」
+ *      —— **一张源图派生两张封面**，这就是公众号图文消息的封面上限（图文无三图封面；
+ *         三图封面仅「图片消息/小绿书」支持，见 references/troubleshooting.md D7）
+ *      → 点「确认」落库
+ * 判据：`.js_cover_preview_new` 显示且背景图含 qpic.cn（新流程下也接受 `.card-cover-img` 有图）。
+ */
 async function setCoverFromContent(page) {
   log('设置封面（从正文选择）...');
   if (!await clickSel(page, '.select-cover__btn.js_cover_btn_area', 5000)
@@ -184,11 +229,9 @@ async function setCoverFromContent(page) {
     return false;
   }
   await sleep(2500);
-  // 若出现引导弹窗先关掉再重点一次封面按钮
-  if (await clickInDialogs(page, '我知道了')) {
-    await sleep(1500);
-    await clickSel(page, '.js_cover_btn_area', 4000);
-    await sleep(2500);
+  // 若出现引导/切换账号等干扰弹窗先关掉再重点一次封面按钮
+  for (const t of ['我知道了', '取消']) {
+    if (await clickInDialogs(page, t)) { log('关闭干扰弹窗:', t); await sleep(1200); }
   }
   if (!await clickExact(page, 'a.js_selectCoverFromContent', '从正文选择', 6000)
     && !await clickExact(page, 'a', '从正文选择', 3000)) {
@@ -202,18 +245,47 @@ async function setCoverFromContent(page) {
     return false;
   }
   await sleep(1500);
-  await clickExact(page, 'button', '下一步', 5000);
+  // 等「下一步」可用再点（未选图时它是 disabled，点了没反应）
+  const nextOk = await waitEnabledText(page, '下一步', 8000);
+  if (!nextOk) { log('WARN: “下一步”按钮未变为可用，跳过封面'); return false; }
+  await clickExact(page, 'button', '下一步', 3000);
   await sleep(3000);
-  for (const t of ['确认', '完成', '确定']) { if (await clickExact(page, 'button', t, 2500)) break; }
+  // 「编辑封面」裁剪步骤 → 确认（老版本可能是 完成/确定）
+  let confirmed = false;
+  for (const t of ['确认', '完成', '确定']) { if (await clickExact(page, 'button', t, 3000)) { confirmed = true; break; } }
+  log(confirmed ? '编辑封面已确认（2.35:1 + 1:1 两张封面）' : 'WARN: 未点到“确认”');
   await sleep(3000);
-  const bg = await page.evaluate(() => {
+  const st = await page.evaluate(() => {
     const el = document.querySelector('.js_cover_preview_new');
-    return el ? getComputedStyle(el).backgroundImage : '';
-  }).catch(() => '');
-  const ok = !!bg && bg.includes('qpic.cn');
-  log(ok ? '封面设置成功' : 'WARN: 封面预览未更新');
+    const disp = el ? getComputedStyle(el).display : 'none';
+    const bg = el ? getComputedStyle(el).backgroundImage : '';
+    const cardImgs = Array.from(document.querySelectorAll('.js_cover_preview_new img, .select-splice-cover img, .card-cover-img'))
+      .filter(im => ((im.getAttribute('src') || '')).includes('mmbiz.qpic.cn')).length;
+    return { disp, bg, cardImgs };
+  }).catch(() => ({ disp: 'none', bg: '', cardImgs: 0 }));
+  const ok = (st.disp !== 'none' && (st.bg.includes('qpic.cn') || st.cardImgs > 0));
+  log(ok ? '封面设置成功' : ('WARN: 封面预览未更新 ' + JSON.stringify(st)));
   await shot(page, 'cover.png');
   return ok;
+}
+
+/** 等待某个按钮文本出现且不含 disabled 类 */
+async function waitEnabledText(page, text, timeout = 8000) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    const ok = await page.evaluate(t => {
+      let en = false;
+      document.querySelectorAll('button').forEach(b => {
+        if ((b.innerText || '').trim() !== t) return;
+        const r = b.getBoundingClientRect();
+        if (r.width > 0 && !b.className.includes('disabled')) en = true;
+      });
+      return en;
+    }, text).catch(() => false);
+    if (ok) return true;
+    await sleep(500);
+  }
+  return false;
 }
 
 /* --------------------------- 扫码验证 --------------------------- */
@@ -300,8 +372,42 @@ async function main() {
   const C = JSON.parse(fs.readFileSync(CONTENT_PATH, 'utf8'));
   const partA = Array.isArray(C.body_partA) ? C.body_partA.join('') : (C.body_partA || '');
   const partB = Array.isArray(C.body_partB) ? C.body_partB.join('') : (C.body_partB || '');
-  const imagePath = C.image ? path.resolve(C.image) : null;
-  if (imagePath && !fs.existsSync(imagePath)) throw new Error('配图不存在: ' + imagePath);
+
+  /**
+   * 正文模板（三种来源，优先级从高到低）：
+   *   1) body_html[]：数组 join 后用 `<!--IMAGE-->` 占位 —— 图片**按占位符位置分布**到段落之间（推荐）
+   *   2) body_partA + body_partB：图片**统一插在两段之间**（旧行为，兼容）
+   * composeBody() 把占位符按顺序替换成已上传图片的 <p>img</p>；
+   * 占位符只有 1 个但图片多张时，全部塞在该处（等价旧行为）；图片多于占位符时多出的追加到末尾。
+   */
+  let BODY_TEMPLATE = '';
+  if (Array.isArray(C.body_html) && C.body_html.length) BODY_TEMPLATE = C.body_html.join('');
+  else if (typeof C.body_html === 'string' && C.body_html) BODY_TEMPLATE = C.body_html;
+  else BODY_TEMPLATE = partA + '<!--IMAGE-->' + partB;
+
+  function composeBody(imgs) {
+    const blocks = imgs.map(h => '<p>' + h + '</p>');
+    const marks = (BODY_TEMPLATE.match(/<!--IMAGE-->/g) || []).length;
+    if (!marks) return BODY_TEMPLATE + blocks.join('');
+    let i = 0;
+    let out = BODY_TEMPLATE.replace(/<!--IMAGE-->/g, () => {
+      if (i === 0 && marks === 1) { const all = blocks.slice(i); i = blocks.length; return all.join(''); }
+      return blocks[i++] || '';
+    });
+    if (i < blocks.length) out += blocks.slice(i).join('');
+    return out;
+  }
+
+  // 配图：content.json 的 images[]（或旧的 image）优先；否则按 keyword+tags 从素材库自动挑 Top-N（默认 3 张）
+  const { planImages } = require(path.resolve(__dirname, '..', '..', 'isolated-browser', 'scripts', 'post_images.js'));
+  const explicit = Array.isArray(C.images) ? C.images : (C.image ? [C.image] : []);
+  const plan = planImages({
+    explicit, noImage: C.no_image === true, keyword: C.keyword || C.title, tags: C.tags,
+    top: C.image_top, dir: C.image_dir,
+  });
+  const IMAGES = plan.images;
+  log(`[配图] ${IMAGES.length} 张（来源 ${plan.source}）`);
+  if (plan.detail) plan.detail.chosen.forEach((c, i) => log(`  ${i + 1}) 图${c.number} ${c.name || ''} → ${c.image}`));
 
   log('连接 CDP 127.0.0.1:' + CDP_PORT);
   const browser = await chromium.connectOverCDP('http://127.0.0.1:' + CDP_PORT);
@@ -334,11 +440,11 @@ async function main() {
   await sleep(800);
   log('标题已填:', C.title);
 
-  await setHTML(page, bodyIdx, partA);
+  await setHTML(page, bodyIdx, BODY_TEMPLATE.replace(/<!--IMAGE-->/g, ''));
   await sleep(1500);
 
   let inserted = 0;
-  if (imagePath) {
+  if (IMAGES.length) {
     const inputs = await page.$$('input[type=file]');
     let target = null;
     for (const inp of inputs) {
@@ -348,20 +454,25 @@ async function main() {
     if (!target && inputs.length) target = inputs[0];
     if (!target) log('WARN: 未找到 input[type=file]，跳过插图');
     else {
-      log('上传插图:', imagePath);
-      await target.setInputFiles(imagePath);
-      let imgHtml = null;
-      for (let i = 0; i < 40; i++) {
-        const imgs = await realImgs(page, bodyIdx);
-        if (imgs.length) { imgHtml = imgs[0]; break; }
-        await sleep(1500);
+      const htmls = [];
+      for (let k = 0; k < IMAGES.length; k++) {
+        if (!fs.existsSync(IMAGES[k])) { log('WARN: 配图不存在，跳过:', IMAGES[k]); continue; }
+        const before = (await realImgs(page, bodyIdx)).length;
+        log(`上传插图 ${k + 1}/${IMAGES.length}:`, IMAGES[k]);
+        await target.setInputFiles(IMAGES[k]);
+        let got = null;
+        for (let i = 0; i < 40; i++) {
+          await sleep(1500);
+          const imgs = await realImgs(page, bodyIdx);
+          if (imgs.length > before) { got = imgs[imgs.length - 1]; break; }
+        }
+        if (got) htmls.push(got); else log(`WARN: 第 ${k + 1} 张插图上传超时`);
       }
-      if (!imgHtml) log('WARN: 插图上传超时，未插入配图');
-      else {
-        inserted = 1;
-        await setHTML(page, bodyIdx, partA + '<p>' + imgHtml + '</p>' + partB);
+      if (htmls.length) {
+        inserted = htmls.length;
+        await setHTML(page, bodyIdx, composeBody(htmls));
         await sleep(2000);
-        log('正文重组完成（图片置于段落之间）');
+        log(`正文重组完成（${inserted} 张图片置于段落之间）`);
       }
     }
   }
